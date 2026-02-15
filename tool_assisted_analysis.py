@@ -17,7 +17,63 @@ from typing import Callable
 
 from snapshot_diff import SnapshotDiff, FileDiff, get_snapshot_files, _find_root_dir, _is_binary, DEFAULT_BINARY_EXTENSIONS
 from utils.ai_client import BaseAIClient, AIMessage, AIResponse, ToolCall, AnthropicClient, OpenAIClient, make_api_call_with_retry
+from utils.api_cache import get_cached_response, set_cached_response
 from utils.config import get_config
+
+
+# ---------------------------------------------------------------------------
+# Local cache helpers for tool-use conversation turns
+# ---------------------------------------------------------------------------
+
+class _CachedBlock:
+    """Lightweight object matching API response block attributes for cached tool calls."""
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
+def _tool_turn_cache_content(system, tools, messages):
+    """Create deterministic cache content string for a tool conversation turn."""
+    state = {"tools": tools, "messages": messages}
+    if system is not None:
+        state["system"] = system
+    return "TOOL_TURN|" + json.dumps(state, sort_keys=True, ensure_ascii=False)
+
+
+def _serialize_anthropic_turn(text_parts, tool_calls):
+    """Serialize an Anthropic turn's extracted data for local caching."""
+    tc_data = [{"id": tc.id, "name": tc.name, "input": tc.input} for tc in tool_calls]
+    return json.dumps({"text_parts": text_parts, "tool_calls": tc_data}, sort_keys=True, ensure_ascii=False)
+
+
+def _deserialize_anthropic_turn(cached_str):
+    """Deserialize cached Anthropic turn data."""
+    data = json.loads(cached_str)
+    tool_calls = [_CachedBlock(type="tool_use", **tc) for tc in data["tool_calls"]]
+    return data["text_parts"], tool_calls
+
+
+def _serialize_openai_turn(content, tool_calls):
+    """Serialize an OpenAI turn's data for local caching."""
+    data = {"content": content}
+    if tool_calls:
+        data["tool_calls"] = [
+            {"id": tc.id, "name": tc.function.name, "arguments": tc.function.arguments}
+            for tc in tool_calls
+        ]
+    return json.dumps(data, sort_keys=True, ensure_ascii=False)
+
+
+def _deserialize_openai_turn(cached_str):
+    """Deserialize cached OpenAI turn data."""
+    data = json.loads(cached_str)
+    tool_calls = None
+    if data.get("tool_calls"):
+        tool_calls = [
+            _CachedBlock(id=tc["id"], function=_CachedBlock(name=tc["name"], arguments=tc["arguments"]))
+            for tc in data["tool_calls"]
+        ]
+    return data["content"], tool_calls
 
 
 # ---------------------------------------------------------------------------
@@ -109,31 +165,49 @@ def _run_anthropic(
     accumulated_text = []
 
     for turn in range(max_turns):
-        def _make_api_call(msgs=messages):
-            return ai_client.client.messages.create(
-                model=ai_client.model,
-                max_tokens=max_tokens,
-                system=system_message,
-                tools=tools,
-                messages=msgs,
+        # Check local cache for this turn
+        turn_cache_content = _tool_turn_cache_content(system_message, tools, messages)
+        cached_response = get_cached_response(turn_cache_content, "", ai_client.model, max_tokens)
+
+        if cached_response is not None:
+            text_parts, tool_calls = _deserialize_anthropic_turn(cached_response)
+            from_cache = True
+        else:
+            def _make_api_call(msgs=messages):
+                return ai_client.client.messages.create(
+                    model=ai_client.model,
+                    max_tokens=max_tokens,
+                    system=system_message,
+                    tools=tools,
+                    messages=msgs,
+                )
+
+            response = make_api_call_with_retry(_make_api_call)
+
+            # Extract text and tool calls from response
+            text_parts = []
+            tool_calls = []
+            for block in response.content:
+                if block.type == 'text':
+                    text_parts.append(block.text)
+                elif block.type == 'tool_use':
+                    tool_calls.append(block)
+
+            # Cache this turn's response
+            set_cached_response(
+                turn_cache_content, "", ai_client.model,
+                _serialize_anthropic_turn(text_parts, tool_calls),
+                max_tokens,
             )
-
-        response = make_api_call_with_retry(_make_api_call)
-
-        # Extract text and tool calls from response
-        text_parts = []
-        tool_calls = []
-        for block in response.content:
-            if block.type == 'text':
-                text_parts.append(block.text)
-            elif block.type == 'tool_use':
-                tool_calls.append(block)
+            from_cache = False
 
         text = ''.join(text_parts)
         if text:
             accumulated_text.append(text)
 
         if not tool_calls:
+            if from_cache:
+                print(f"    [turn {turn + 1}] final response (cached)", flush=True)
             break
 
         # Add assistant response to conversation
@@ -154,7 +228,8 @@ def _run_anthropic(
         messages.append({"role": "user", "content": tool_result_content})
 
         tool_names = ', '.join(tc.name for tc in tool_calls)
-        print(f"    [turn {turn + 1}] called: {tool_names}", flush=True)
+        cache_label = " (cached)" if from_cache else ""
+        print(f"    [turn {turn + 1}] called: {tool_names}{cache_label}", flush=True)
 
     return '\n'.join(accumulated_text)
 
@@ -197,28 +272,48 @@ def _run_openai(
     accumulated_text = []
 
     for turn in range(max_turns):
-        def _make_api_call(msgs=messages):
-            return ai_client.client.chat.completions.create(
-                model=ai_client.model,
-                max_completion_tokens=max_tokens,
-                tools=openai_tools,
-                messages=msgs,
+        # Check local cache for this turn (system is already in messages for OpenAI)
+        turn_cache_content = _tool_turn_cache_content(None, openai_tools, messages)
+        cached_response = get_cached_response(turn_cache_content, "", ai_client.model, max_tokens)
+
+        if cached_response is not None:
+            content, tool_calls_list = _deserialize_openai_turn(cached_response)
+            from_cache = True
+        else:
+            def _make_api_call(msgs=messages):
+                return ai_client.client.chat.completions.create(
+                    model=ai_client.model,
+                    max_completion_tokens=max_tokens,
+                    tools=openai_tools,
+                    messages=msgs,
+                )
+
+            response = make_api_call_with_retry(_make_api_call)
+            choice = response.choices[0]
+            message = choice.message
+            content = message.content
+            tool_calls_list = message.tool_calls
+
+            # Cache this turn's response
+            set_cached_response(
+                turn_cache_content, "", ai_client.model,
+                _serialize_openai_turn(content, tool_calls_list),
+                max_tokens,
             )
+            from_cache = False
 
-        response = make_api_call_with_retry(_make_api_call)
-        choice = response.choices[0]
-        message = choice.message
+        if content:
+            accumulated_text.append(content)
 
-        if message.content:
-            accumulated_text.append(message.content)
-
-        if not message.tool_calls:
+        if not tool_calls_list:
+            if from_cache:
+                print(f"    [turn {turn + 1}] final response (cached)", flush=True)
             break
 
         # Add the assistant message (with tool calls) to conversation
         messages.append({
             "role": "assistant",
-            "content": message.content or "",
+            "content": content or "",
             "tool_calls": [
                 {
                     "id": tc.id,
@@ -228,12 +323,12 @@ def _run_openai(
                         "arguments": tc.function.arguments,
                     },
                 }
-                for tc in message.tool_calls
+                for tc in tool_calls_list
             ],
         })
 
         # Execute tools and add each result as a separate tool message
-        for tc in message.tool_calls:
+        for tc in tool_calls_list:
             tool_name = tc.function.name
             try:
                 tool_input = json.loads(tc.function.arguments)
@@ -256,8 +351,9 @@ def _run_openai(
                 "content": result_str,
             })
 
-        tool_names = ', '.join(tc.function.name for tc in message.tool_calls)
-        print(f"    [turn {turn + 1}] called: {tool_names}", flush=True)
+        tool_names = ', '.join(tc.function.name for tc in tool_calls_list)
+        cache_label = " (cached)" if from_cache else ""
+        print(f"    [turn {turn + 1}] called: {tool_names}{cache_label}", flush=True)
 
     return '\n'.join(accumulated_text)
 
