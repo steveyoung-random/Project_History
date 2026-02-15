@@ -1,0 +1,72 @@
+{
+  "models": {
+        "claude-opus-4-5": {
+            "platform": "Claude",
+            "model": "claude-opus-4-5",
+            "max_tokens": 8000
+        },  
+        "claude-sonnet-4-5": {
+            "platform": "Claude",
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 8000
+        },        
+        "claude-haiku-4-5": {
+            "platform": "Claude",
+            "model": "claude-haiku-4-5",
+            "max_tokens": 8000
+        },
+        "gpt-5": {
+            "platform": "OpenAI",
+            "model": "gpt-5",
+            "max_tokens": 8000
+        },
+        "gpt-5-mini": {
+            "platform": "OpenAI",
+            "model": "gpt-5-mini",
+            "max_tokens": 8000
+        },
+        "gpt-5-nano": {
+            "platform": "OpenAI",
+            "model": "gpt-5-nano",
+            "max_tokens": 8000
+        },
+        "gpt-5.1": {
+            "platform": "OpenAI",
+            "model": "gpt-5.1",
+            "max_tokens": 8000
+        },
+        "gpt-5.2": {
+            "platform": "OpenAI",
+            "model": "gpt-5.2",
+            "max_tokens": 8000
+        }
+  },
+  "current_engine": "claude-sonnet-4-5",
+  "model_assignments": {
+    "change_summary": "claude-sonnet-4-5",
+    "deep_analysis": "claude-sonnet-4-5",
+    "project_narrative": "claude-sonnet-4-5"
+  },
+  "output": {
+    "directory": "./output"
+  },
+  "log_stem": "log",
+  "zip_directory": "D:\\OneDrive\\My Software",
+  "binary_extensions": [
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
+    ".exe", ".dll", ".so", ".dylib", ".bin",
+    ".zip", ".gz", ".tar", ".rar", ".7z",
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx",
+    ".pyc", ".pyo", ".class", ".o", ".obj",
+    ".db", ".sqlite", ".sqlite3",
+    ".mp3", ".mp4", ".wav", ".avi", ".mov",
+    ".ttf", ".otf", ".woff", ".woff2",
+    ".DS_Store",
+    ".suo", ".cache", ".resources", ".pdb", ".nupkg", ".snk",
+    ".tlog", ".lastbuildstate", ".iobj", ".ipdb", ".ilk",
+    ".manifest", ".idb", ".exp", ".lib", ".res",
+    ".elf", ".hex", ".eep", ".lst"
+  ],
+  "max_diff_lines_for_shallow": 200,
+  "max_diff_lines_for_prompt": 5000
+}
