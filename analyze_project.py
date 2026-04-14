@@ -129,9 +129,8 @@ def cmd_drill_down(args):
         print("\nPhase 1: Generating project understanding...")
         file_listing, file_contents = get_snapshot_files(snap_a.path, binary_ext)
         # Check for status docs
-        from change_analyzer import detect_status_docs
-        status_doc_names = detect_status_docs(file_listing) if hasattr(sys.modules.get('change_analyzer', None), 'detect_status_docs') else []
-        status_docs = {name: file_contents[name] for name in status_doc_names if name in file_contents}
+        status_docs = {path: file_contents[path] for path in file_listing
+                       if _is_status_doc(path) and path in file_contents}
         project_summary = generate_project_summary(
             file_listing, file_contents, status_docs, args.project_name, ai_client
         )

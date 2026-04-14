@@ -41,11 +41,11 @@
             "max_tokens": 8000
         }
   },
-  "current_engine": "claude-sonnet-4-5",
+  "current_engine": "gpt-5.2",
   "model_assignments": {
-    "change_summary": "claude-sonnet-4-5",
-    "deep_analysis": "claude-sonnet-4-5",
-    "project_narrative": "claude-sonnet-4-5"
+    "change_summary": "gpt-5.2",
+    "deep_analysis": "gpt-5.2",
+    "project_narrative": "gpt-5.2"
   },
   "output": {
     "directory": "./output"
